@@ -58,23 +58,24 @@ class Queries(object):
         :return: deserialized REST JSON output
         """
 
-        for _ in range(60):
-            headers = {
-                "Authorization": f"token {self.access_token}",
-            }
-            if params is None:
-                params = dict()
-            if path.startswith("/"):
-                path = path[1:]
+        headers = {
+            "Authorization": f"token {self.access_token}",
+        }
+        if params is None:
+            params = dict()
+        if path.startswith("/"):
+            path = path[1:]
+
+        for attempt in range(3):
             try:
                 async with self.semaphore:
                     r = await self.session.get(f"https://api.github.com/{path}",
                                                headers=headers,
                                                params=tuple(params.items()))
                 if r.status == 202:
-                    # print(f"{path} returned 202. Retrying...")
-                    print(f"A path returned 202. Retrying...")
-                    await asyncio.sleep(2)
+                    sleep_time = 2 ** attempt
+                    print(f"A path returned 202. Retrying in {sleep_time}s...")
+                    await asyncio.sleep(sleep_time)
                     continue
 
                 result = await r.json()
@@ -88,13 +89,13 @@ class Queries(object):
                                      headers=headers,
                                      params=tuple(params.items()))
                     if r.status_code == 202:
-                        print(f"A path returned 202. Retrying...")
-                        await asyncio.sleep(2)
+                        sleep_time = 2 ** attempt
+                        print(f"A path returned 202. Retrying in {sleep_time}s...")
+                        await asyncio.sleep(sleep_time)
                         continue
                     elif r.status_code == 200:
                         return r.json()
-        # print(f"There were too many 202s. Data for {path} will be incomplete.")
-        print("There were too many 202s. Data for this repository will be incomplete.")
+        print(f"Skipping {path}: too many 202s. Data incomplete.")
         return dict()
 
     @staticmethod
@@ -468,8 +469,18 @@ Languages:
             return self._lines_changed
         additions = 0
         deletions = 0
-        for repo in await self.all_repos:
+        consecutive_202s = 0
+        repos = list(await self.all_repos)
+        for i, repo in enumerate(repos):
             r = await self.queries.query_rest(f"/repos/{repo}/stats/contributors")
+            if not r:
+                consecutive_202s += 1
+                print(f"Data unavailable for {repo} ({consecutive_202s}/3 consecutive 202s)")
+                if consecutive_202s >= 3:
+                    print(f"Too many consecutive 202s, skipping remaining {len(repos) - i - 1} repos for lines_changed")
+                    break
+                continue
+            consecutive_202s = 0
             for author_obj in r:
                 # Handle malformed response from the API by skipping this repo
                 if (not isinstance(author_obj, dict)
