@@ -195,15 +195,12 @@ query {
 
     @staticmethod
     def contribs_by_year(year: str) -> str:
-        """
-        :param year: year to query for
-        :return: portion of a GraphQL query with desired info for a given year
-        """
         return f"""
     year{year}: contributionsCollection(
         from: "{year}-01-01T00:00:00Z",
         to: "{int(year) + 1}-01-01T00:00:00Z"
     ) {{
+      totalCommitContributions
       contributionCalendar {{
         totalContributions
       }}
@@ -212,10 +209,6 @@ query {
 
     @classmethod
     def all_contribs(cls, years: List[str]) -> str:
-        """
-        :param years: list of years to get contributions for
-        :return: query to retrieve contribution information for all user years
-        """
         by_years = "\n".join(map(cls.contribs_by_year, years))
         return f"""
 query {{
@@ -245,6 +238,7 @@ class Stats(object):
         self._stargazers = None
         self._forks = None
         self._total_contributions = None
+        self._commit_contributions = None
         self._languages = None
         self._repos = None
         self._lines_changed = None
@@ -446,6 +440,7 @@ Languages:
             return self._total_contributions
 
         self._total_contributions = 0
+        self._commit_contributions = 0
         years = (await self.queries.query(Queries.contrib_years())) \
             .get("data", {}) \
             .get("viewer", {}) \
@@ -455,10 +450,18 @@ Languages:
             .get("data", {}) \
             .get("viewer", {}).values()
         for year in by_year:
+            self._commit_contributions += year.get("totalCommitContributions", 0)
             self._total_contributions += year \
                 .get("contributionCalendar", {}) \
                 .get("totalContributions", 0)
         return self._total_contributions
+
+    @property
+    async def commit_contributions(self) -> int:
+        if self._commit_contributions is not None:
+            return self._commit_contributions
+        await self.total_contributions
+        return self._commit_contributions
 
     @property
     async def lines_changed(self) -> Tuple[int, int]:
